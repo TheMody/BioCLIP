@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import timm
 from config import *
+import math
 
 class VisionEncoder(nn.Module):
     """DINOv2 vision backbone + projection head."""
@@ -70,8 +71,8 @@ class CLIP(nn.Module):
 
     @staticmethod
     def clip_loss(logits: torch.Tensor) -> torch.Tensor:
-        """Symmetric InfoNCE loss (cross‑entropy in both directions)."""
+        """Symmetric InfoNCE loss (cross‑entropy in both directions). Normalized to be invariant to the batch size""" 
         targets = torch.arange(logits.size(0), device=logits.device)
-        loss_i = F.cross_entropy(logits, targets)
-        loss_t = F.cross_entropy(logits.t(), targets)
-        return (loss_i + loss_t) / 2
+        loss_i = F.cross_entropy(logits, targets) 
+        loss_t = F.cross_entropy(logits.t(), targets) 
+        return ((loss_i + loss_t) / 2)/ math.log(logits.size(0))

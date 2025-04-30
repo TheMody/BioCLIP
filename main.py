@@ -10,7 +10,7 @@ the dataset section with your own image–text pairs (e.g. COCO, Flickr30k) to u
 from config import *
 import argparse
 from pathlib import Path
-
+import os
 import torch
 from torch.utils.data import DataLoader
 
@@ -21,6 +21,7 @@ import wandb
 from tqdm import tqdm
 from scheduler import CosineWarmupScheduler
 from visualize import plot_embedding_space
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -71,7 +72,6 @@ def main():
     model = CLIP().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
-   
 
     transform = transforms.Compose([
         transforms.Resize(IMG_SIZE, interpolation=transforms.InterpolationMode.BICUBIC),
@@ -115,7 +115,7 @@ def main():
                     loss = model.clip_loss(logits) / gradient_accumulation_steps  # scale
                     loss.backward()
                     batch_loss += loss.item() * gradient_accumulation_steps  
-
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                 optimizer.step()
                 scheduler.step()
                 total_loss += batch_loss
@@ -123,17 +123,16 @@ def main():
                 wandb.log({"loss": batch_loss, "lr":scheduler.get_last_lr()[0]})
                 pbar.update(1)
                 pbar.set_postfix(loss=batch_loss)
-                step += 1
-                if step >= 100:
-                    break
-            total_loss /= len(train_loader) 
-            
+                # step += 1
+                # if step >= 100:
+                #     break
 
-
+        total_loss /= len(train_loader) #step#
         print(f"Epoch {epoch + 1}/{epochs} \t loss: {total_loss:.4f}")
         plot_data = next(iter(test_loader))
         plot_embedding_space(model, plot_data)
         mean_loss, acc_i2t, acc_t2i = evaluate(model, test_loader)
+        print(f"Test loss: {mean_loss:.4f} \t i2t acc: {acc_i2t:.4f} \t t2i acc: {acc_t2i:.4f}")
         wandbimg = wandb.Image("embedding_space.png")
         wandb.log({"test_loss": mean_loss, "acc_i2t": acc_i2t, "acc_t2i": acc_t2i, "embedding_space": wandbimg})
         if mean_loss < min_loss:
@@ -141,10 +140,6 @@ def main():
             print(f"Saving model with loss {min_loss:.4f}")
             args.output.parent.mkdir(parents=True, exist_ok=True)
             torch.save(model.state_dict(), args.output)
-
-    #args.output.parent.mkdir(parents=True, exist_ok=True)
-    # torch.save(model.state_dict(), args.output)
-    # print(f"Model weights saved to {args.output}")
 
 
 if __name__ == "__main__":
