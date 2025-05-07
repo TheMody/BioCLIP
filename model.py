@@ -31,7 +31,7 @@ class VisionEncoder(nn.Module):
 class TextEncoder(nn.Module):
     """BERT‑family text backbone + projection head."""
 
-    def __init__(self, model_name: str ="answerdotai/ModernBERT-base", proj_dim: int = 256):# "distilbert-base-uncased"
+    def __init__(self, model_name: str ="distilbert-base-uncased", proj_dim: int = 256):# "answerdotai/ModernBERT-base"
         super().__init__()
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.backbone = AutoModel.from_pretrained(model_name)
@@ -40,7 +40,7 @@ class TextEncoder(nn.Module):
 
     @torch.no_grad()
     def tokenize(self, texts, device):
-        batch = self.tokenizer(texts, padding=True, truncation=True, return_tensors="pt", max_length=32)
+        batch = self.tokenizer(texts, padding=True, truncation=True, return_tensors="pt", max_length=64)
         return {k: v.to(device) for k, v in batch.items()}
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
@@ -81,6 +81,22 @@ class DWConvBlock(nn.Module):
         x = channel_last(x)         # back to (B, C, L)
         return x + res
 
+class downsample_block(nn.Module):
+    """Downsample block with layernorm and linear projection."""
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.ln = nn.LayerNorm(dim)
+        self.proj = nn.Linear(dim, dim * 2, bias=False)
+        self.pool = nn.Conv1d(dim * 2, dim * 2, kernel_size=2, stride=2)  # stride‑2 pool
+
+    def forward(self, x: torch.Tensor): #input is (B, C, L)
+        x = channel_last(x)  # (B, L, C)
+        x = self.ln(x)
+        x = self.proj(x)
+        x = channel_last(x) # (B, C, L)
+        x = self.pool(F.gelu(x))
+        return x
 
 # -----------------------------------------------------------------------------
 #  ECGEncoderNext
@@ -94,35 +110,30 @@ class ECGEncoder(nn.Module):
 
         self.patch_embed = nn.Conv1d(12, width, kernel_size=16, stride=4, padding=6)  # (B, W, ~250)
 
-        blocks = []
+        blocks = torch.nn.ModuleList()
         dim = width
         for d, depth in enumerate(depths):
             for _ in range(depth):
                 blocks.append(DWConvBlock(dim, drop=0.1))
             # downsample except after last stage
             if d < len(depths) - 1:
-                blocks.append(nn.Sequential(
-                    nn.LayerNorm(dim, eps=1e-6),
-                    nn.Linear(dim, dim * 2, bias=False),
-                    nn.GELU(),
-                    nn.Conv1d(dim * 2, dim * 2, kernel_size=2, stride=2),  # stride‑2 pool
-                ))
+                blocks.append(downsample_block(dim))
                 dim *= 2
-        self.backbone = nn.Sequential(*blocks)
+        self.backbone = blocks
 
         self.head_norm = nn.LayerNorm(dim)
-        self.gap = nn.AdaptiveAvgPool1d(1)
         self.proj = nn.Sequential(
             nn.Linear(dim, proj_dim, bias=False),
-            nn.SiLU(),
+          #  nn.SiLU(),
         )
 
     def forward(self, wave: torch.Tensor):  # (B, 12, L)
         x = self.patch_embed(wave)
-        x = self.backbone(x)
+        for block in self.backbone:
+            x = block(x)
         x = channel_last(x)              # (B, L, C)
         x = self.head_norm(x)
-        x = x.mean(dim=1)                # global avg over sequence length
+        x = x.mean(dim=1)                # global max over sequence length
         z = self.proj(x)
         return F.normalize(z, dim=-1)
 
