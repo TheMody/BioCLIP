@@ -108,7 +108,7 @@ def main():
     train_loader_ecg = DataLoader(trainset_ecg, batch_size=batch_size*gradient_accumulation_steps, shuffle=True, num_workers=4, pin_memory=True)
     test_loader_ecg = DataLoader(testset_ecg, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
     steps_per_epoch = min(len(train_loader_imgs), len(train_loader_ecg))
-    scheduler = CosineWarmupScheduler(optimizer, warmup=100, max_iters=epochs*len(train_loader_imgs), min_factor=0.1)
+    scheduler = CosineWarmupScheduler(optimizer, warmup=100, max_iters=epochs*steps_per_epoch, min_factor=0.1)
 
     wandb.init(project="bioclip", config=args)
     min_loss = 1e10

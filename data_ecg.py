@@ -28,12 +28,14 @@ class PTBXLWaveformDataset(Dataset):
         root: str | Path,
         split: str = "train",              # "train", "test", or "all"
         sampling_rate: int = 100,          # 100 Hz (“_lr”) or 500 Hz (“_hr”)
-        max_len: int = 1000,               # crop / pad length (1000 = 10 s @100 Hz)
+        max_len: int = 5000,               # crop / pad length (1000 = 10 s @100 Hz)
+        label_type: str = "text",
     ):
         super().__init__()
         self.root = Path(root)
         self.sr = sampling_rate
         self.max_len = max_len
+        self.label_type = label_type    
 
      #   self.labelcodes_to_text = {}
     #    pd.read_csv(self.root / "scp_statements.csv")
@@ -42,23 +44,7 @@ class PTBXLWaveformDataset(Dataset):
         # Metadata
         # -------------------------
         meta = pd.read_csv(self.root / "ptbxl_database.csv", index_col="ecg_id")
-     #   meta.scp_codes = meta.scp_codes.apply(ast.literal_eval)
-
-        # # diagnostic superclass map (NORM, AFIB, …)
-        # agg_df = (
-        #     pd.read_csv(self.root / "scp_statements.csv", index_col=0)
-        #     .query("diagnostic == 1")
-        # )
-        # self._key2superclass = {
-        #     k: v for k, v in zip(agg_df.index, agg_df.diagnostic_class)
-        # }
-
-        # def _aggregate(y_dic: Dict[str, int]) -> List[str]:
-        #     return list(
-        #         {self._key2superclass[k] for k in y_dic.keys() if k in self._key2superclass}
-        #     )
-
-        # meta["diagnostic_superclass"] = meta.scp_codes.apply(_aggregate)
+     # 
 
         # split on official strat_fold column your original script used
         if split == "train":
@@ -68,6 +54,33 @@ class PTBXLWaveformDataset(Dataset):
         elif split != "all":
             raise ValueError("split must be 'train', 'test', or 'all'")
 
+        if self.label_type == "categorical":
+          #  print(meta)
+            meta.scp_codes = meta.scp_codes.apply(ast.literal_eval)
+          #  print(meta.scp_codes)
+
+            # diagnostic superclass map (NORM, AFIB, …)
+            agg_df = (
+                pd.read_csv(self.root / "scp_statements.csv", index_col=0)
+                .query("diagnostic == 1")
+            )
+            self._key2superclass = {
+                k: v for k, v in zip(agg_df.index, agg_df.diagnostic_class)
+            }
+
+            def _aggregate(y_dic: Dict[str, int]) -> List[str]:
+                return list(
+                    {self._key2superclass[k] for k in y_dic.keys() if k in self._key2superclass}
+                )
+
+            meta["diagnostic_superclass"] = meta.scp_codes.apply(_aggregate)
+            values_array = np.asarray(meta.diagnostic_superclass.values)
+            self.unique = []
+            for v in values_array:
+                for a in v:
+                    if a not in self.unique:
+                        self.unique.append(a)
+            self.unique.append("UNK")
         self.meta = meta.reset_index()  # keep ecg_id as a column
 
         # choose filename column
@@ -101,5 +114,13 @@ class PTBXLWaveformDataset(Dataset):
         path = self.root / row[self.fn_col]
         wave = self._load_waveform(path)
         #print(row.report)
-        labels =row.report# row.diagnostic_superclass or ["UNK"]
+        if self.label_type == "text":
+            labels =row.report
+        if self.label_type == "categorical":
+            labels_text = row.diagnostic_superclass or ["UNK"]
+            labels = torch.zeros(len(self.unique)).float()
+            for label in labels_text:
+                labels[self.unique.index(label)] = 1
+
+            return wave, labels
         return wave, str(labels)#, row.ecg_id

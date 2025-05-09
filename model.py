@@ -98,6 +98,18 @@ class downsample_block(nn.Module):
         x = self.pool(F.gelu(x))
         return x
 
+from timeSeries_model import Inceptiontime
+class ECGEncoder_tsai(nn.Module):
+    def __init__(self, proj_dim=256):
+        super().__init__()
+        self.backbone = Inceptiontime(12, 256)
+        self.proj     = nn.Linear(1024, proj_dim, bias=False)
+    def forward(self, x):
+        x = self.backbone(x)
+        x = x.mean(dim=2)  # global max over sequence length
+     #   print(x.shape)
+        z = self.proj(x)
+        return F.normalize(z, dim=-1)
 # -----------------------------------------------------------------------------
 #  ECGEncoderNext
 # -----------------------------------------------------------------------------
@@ -105,7 +117,7 @@ class downsample_block(nn.Module):
 class ECGEncoder(nn.Module):
     """ConvNeXt‑inspired 1‑D encoder → L2‑normed projection."""
 
-    def __init__(self, proj_dim: int = 256, width: int = 128, depths=(2, 2, 2)):
+    def __init__(self, proj_dim: int = 256, width: int = 128, depths=(2, 2, 2, 2, 2)):
         super().__init__()
 
         self.patch_embed = nn.Conv1d(12, width, kernel_size=16, stride=4, padding=6)  # (B, W, ~250)
@@ -133,9 +145,20 @@ class ECGEncoder(nn.Module):
             x = block(x)
         x = channel_last(x)              # (B, L, C)
         x = self.head_norm(x)
-        x = x.mean(dim=1)                # global max over sequence length
+        x = torch.mean(x, dim = 1)              # global max over sequence length
         z = self.proj(x)
         return F.normalize(z, dim=-1)
+    
+class ECG_cls(nn.Module):
+    def __init__(self, output_dim: int = 5):
+        super().__init__()
+        self.backbone = ECGEncoder()#ECGEncoder_tsai()
+        self.fc = nn.Linear(embedding_dim, output_dim)
+
+    def forward(self, x: torch.Tensor):
+        x = self.backbone(x)
+        x = self.fc(x)
+        return x
 
 
 
