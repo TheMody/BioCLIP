@@ -7,4 +7,6 @@ embedding_dim = 256
 max_grad_norm = 1.0
 num_of_vis_data=96
 
+ecg_length = 1000
+
 NUM_MODALITIES = 2

@@ -98,26 +98,13 @@ class downsample_block(nn.Module):
         x = self.pool(F.gelu(x))
         return x
 
-from timeSeries_model import Inceptiontime
-class ECGEncoder_tsai(nn.Module):
-    def __init__(self, proj_dim=256):
-        super().__init__()
-        self.backbone = Inceptiontime(12, 256)
-        self.proj     = nn.Linear(1024, proj_dim, bias=False)
-    def forward(self, x):
-        x = self.backbone(x)
-        x = x.mean(dim=2)  # global max over sequence length
-     #   print(x.shape)
-        z = self.proj(x)
-        return F.normalize(z, dim=-1)
-# -----------------------------------------------------------------------------
 #  ECGEncoderNext
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 
 class ECGEncoder(nn.Module):
     """ConvNeXt‑inspired 1‑D encoder → L2‑normed projection."""
 
-    def __init__(self, proj_dim: int = 256, width: int = 128, depths=(2, 2, 2, 2, 2)):
+    def __init__(self, proj_dim: int = 256, width: int = 128, depths=(2, 2, 2)):
         super().__init__()
 
         self.patch_embed = nn.Conv1d(12, width, kernel_size=16, stride=4, padding=6)  # (B, W, ~250)
@@ -149,16 +136,50 @@ class ECGEncoder(nn.Module):
         z = self.proj(x)
         return F.normalize(z, dim=-1)
     
+
+from x_transformers import Encoder
+from x_transformers.x_transformers import ScaledSinusoidalEmbedding
+
+class ECGEncoder_transformer(nn.Module):
+    def __init__(self,proj_dim = 256, depth=6):
+        super().__init__()
+        self.backbone = Encoder(
+            dim=proj_dim,
+            depth=depth,
+            heads=proj_dim//64,
+            ff_mult=2,
+        )
+        self.attn_token = nn.Parameter(torch.randn( 1,proj_dim))
+        self.embedding = nn.Conv1d(12, proj_dim, kernel_size=19,stride = 9)#
+        #self.embedding = nn.Linear(12,dim)
+        #add sinusoidal positional embedding
+        self.pos_emb = ScaledSinusoidalEmbedding(proj_dim, theta=ecg_length)
+
+
+
+    def forward(self,x): # (B, 12, L)
+        x = self.embedding(x) 
+        x = x.permute(0,2,1)# (B, L, dim)
+        #x = self.embedding(x) 
+        x = x + self.pos_emb(x) 
+        # print(x.shape)
+        B, L, C = x.shape
+        x = torch.cat((x, self.attn_token.expand(B, -1, -1)), dim=1)
+        x = self.backbone(x)
+      #  print(x.shape)
+      
+        return F.normalize(x[:, -1,:], dim =  -1)  # take the last token
+    
 class ECG_cls(nn.Module):
     def __init__(self, output_dim: int = 5):
         super().__init__()
-        self.backbone = ECGEncoder()#ECGEncoder_tsai()
+        self.backbone = ECGEncoder_transformer()#ECGEncoder()#ECGEncoder_tsai()
         self.fc = nn.Linear(embedding_dim, output_dim)
 
     def forward(self, x: torch.Tensor):
         x = self.backbone(x)
         x = self.fc(x)
-        return x
+        return F.sigmoid(x)
 
 
 
@@ -169,7 +190,7 @@ class CLIP(nn.Module):
         super().__init__()
         self.vision = VisionEncoder(proj_dim=proj_dim)
         self.text = TextEncoder(proj_dim=proj_dim)
-        self.ecg = ECGEncoder(proj_dim=proj_dim)
+        self.ecg = ECGEncoder_transformer(proj_dim=proj_dim)
         # self.genomics = OmicsEncoder(proj_dim=proj_dim)
         # self.urine = UrineEncoder(proj_dim=proj_dim)
         # self.blood = BloodEncoder(proj_dim=proj_dim)

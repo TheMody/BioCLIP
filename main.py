@@ -116,8 +116,6 @@ def main():
         model.train()
         total_loss = 0.0
         with tqdm(total=steps_per_epoch, desc="Training,epoch " + str(epoch) ) as pbar:
-            step = 0
-            
             img_loader = iter(train_loader_imgs)
             ecg_loader = iter(train_loader_ecg)
            # for images, texts in train_loader_imgs:
@@ -141,9 +139,9 @@ def main():
                         sub_texts = texts_ecg[start:end]
                     token_batch = model.text.tokenize(sub_texts, device)
                     logits = model(images = sub_images, text = token_batch, ecg = sub_ecgs )
-                    loss = clip_loss(logits) / (gradient_accumulation_steps*NUM_MODALITIES)  # scale
+                    loss = clip_loss(logits) / (gradient_accumulation_steps*NUM_MODALITIES)  # scale 
                     loss.backward()
-                    batch_loss += loss.item() * (gradient_accumulation_steps )
+                    batch_loss += loss.item() * (gradient_accumulation_steps ) #/ NUM_MODALITIES
                     start = (a //NUM_MODALITIES) * batch_size
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                 optimizer.step()
@@ -153,9 +151,6 @@ def main():
                 wandb.log({"loss": batch_loss, "lr":scheduler.get_last_lr()[0], "time": time.time() - start_time})
                 pbar.update(1)
                 pbar.set_postfix(loss=batch_loss)
-                # step += 1
-                # if step >= 100:
-                #     break
 
         total_loss /= steps_per_epoch #step#
         print(f"Epoch {epoch + 1}/{epochs} \t average loss over epoch: {total_loss:.4f}")
