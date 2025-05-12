@@ -13,7 +13,7 @@ class VisionEncoder(nn.Module):
     """DINOv2 vision backbone + projection head."""
 
     def __init__(self, model_name: str = "vit_base_patch16_224.dino", pretrained: bool = True,
-                 proj_dim: int = 256): # for higher res image e.g. 518 use vit_base_patch14_dinov2, but much slower
+                 proj_dim: int = PROJ_DIM): # for higher res image e.g. 518 use vit_base_patch14_dinov2, but much slower
         super().__init__()
         self.backbone = timm.create_model(model_name, pretrained=pretrained)
         embed_dim = self.backbone.embed_dim  # 768 for ViT‑B
@@ -31,7 +31,7 @@ class VisionEncoder(nn.Module):
 class TextEncoder(nn.Module):
     """BERT‑family text backbone + projection head."""
 
-    def __init__(self, model_name: str ="distilbert-base-uncased", proj_dim: int = 256):# "answerdotai/ModernBERT-base"
+    def __init__(self, model_name: str ='intfloat/multilingual-e5-large-instruct', proj_dim: int = PROJ_DIM):# "answerdotai/ModernBERT-base" "distilbert-base-uncased"
         super().__init__()
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.backbone = AutoModel.from_pretrained(model_name)
@@ -40,12 +40,19 @@ class TextEncoder(nn.Module):
 
     @torch.no_grad()
     def tokenize(self, texts, device):
+       # texts = ["passage: " + text for text in texts] maybe needed for the e5small model
         batch = self.tokenizer(texts, padding=True, truncation=True, return_tensors="pt", max_length=64)
         return {k: v.to(device) for k, v in batch.items()}
+    
+    def average_pool(self,last_hidden_states: torch.Tensor,
+                 attention_mask: torch.Tensor) -> torch.Tensor:
+        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+        return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         output = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
-        feats = output.last_hidden_state[:, 0]  # CLS token
+        feats = self.average_pool(output.last_hidden_state, attention_mask)  # [B, D]
+        #feats = output.last_hidden_state[:, 0]  # CLS token
         z = self.proj(feats)
         return F.normalize(z, dim=-1)
 
@@ -141,19 +148,20 @@ from x_transformers import Encoder
 from x_transformers.x_transformers import ScaledSinusoidalEmbedding
 
 class ECGEncoder_transformer(nn.Module):
-    def __init__(self,proj_dim = 256, depth=6):
+    def __init__(self,hidden_dim = 256,proj_dim = PROJ_DIM, depth=6):
         super().__init__()
         self.backbone = Encoder(
-            dim=proj_dim,
+            dim=hidden_dim,
             depth=depth,
-            heads=proj_dim//64,
+            heads=hidden_dim//64,
             ff_mult=2,
         )
-        self.attn_token = nn.Parameter(torch.randn( 1,proj_dim))
-        self.embedding = nn.Conv1d(12, proj_dim, kernel_size=19,stride = 9)#
+        self.attn_token = nn.Parameter(torch.randn( 1,hidden_dim))
+        self.embedding = nn.Conv1d(12, hidden_dim, kernel_size=19,stride = 9)#
         #self.embedding = nn.Linear(12,dim)
         #add sinusoidal positional embedding
-        self.pos_emb = ScaledSinusoidalEmbedding(proj_dim, theta=ecg_length)
+        self.pos_emb = ScaledSinusoidalEmbedding(hidden_dim, theta=ecg_length)
+        self.proj = nn.Linear(hidden_dim, proj_dim, bias=False)
 
 
 
@@ -165,16 +173,16 @@ class ECGEncoder_transformer(nn.Module):
         # print(x.shape)
         B, L, C = x.shape
         x = torch.cat((x, self.attn_token.expand(B, -1, -1)), dim=1)
-        x = self.backbone(x)
+        x = self.backbone(x)[:, -1,:]
       #  print(x.shape)
-      
-        return F.normalize(x[:, -1,:], dim =  -1)  # take the last token
+        x = self.proj(x)
+        return F.normalize(x, dim =  -1)  # take the last token
     
 class ECG_cls(nn.Module):
     def __init__(self, output_dim: int = 5):
         super().__init__()
         self.backbone = ECGEncoder_transformer()#ECGEncoder()#ECGEncoder_tsai()
-        self.fc = nn.Linear(embedding_dim, output_dim)
+        self.fc = nn.Linear(PROJ_DIM, output_dim)
 
     def forward(self, x: torch.Tensor):
         x = self.backbone(x)
@@ -186,11 +194,13 @@ class ECG_cls(nn.Module):
 class CLIP(nn.Module):
     """Lightweight CLIP wrapper producing image‑text similarity logits."""
 
-    def __init__(self, proj_dim: int = embedding_dim, temperature: float = 0.07):
+    def __init__(self, proj_dim: int = PROJ_DIM, temperature: float = 0.07):
         super().__init__()
         self.vision = VisionEncoder(proj_dim=proj_dim)
         self.text = TextEncoder(proj_dim=proj_dim)
         self.ecg = ECGEncoder_transformer(proj_dim=proj_dim)
+        #load ecg_model
+        self.ecg.load_state_dict(torch.load("models/best_ecg_model.pth"))
         # self.genomics = OmicsEncoder(proj_dim=proj_dim)
         # self.urine = UrineEncoder(proj_dim=proj_dim)
         # self.blood = BloodEncoder(proj_dim=proj_dim)
@@ -214,10 +224,10 @@ class CLIP(nn.Module):
         embeddings = []
         if images is not None:
             embeddings.append(img_z)
-        if text is not None:
-            embeddings.append(txt_z)
         if ecg is not None:
             embeddings.append(ecg_z)
+        if text is not None:
+            embeddings.append(txt_z)
         if output_embeddings:
             return embeddings[0], embeddings[1]
         #calculate logits

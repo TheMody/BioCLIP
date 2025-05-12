@@ -42,7 +42,7 @@ def clip_loss(logits: torch.Tensor) -> torch.Tensor:
     return ((loss_i + loss_t) / 2)/ math.log(logits.size(0))
 
 @torch.no_grad()
-def evaluate(model: CLIP, dataloader: DataLoader):
+def evaluate(model: CLIP, dataloader_img: DataLoader, dataloader_ecg:DataLoader):
     """Compute loss and top‑1 retrieval accuracy in both directions."""
     model.eval()
     total_loss = 0.0
@@ -50,7 +50,7 @@ def evaluate(model: CLIP, dataloader: DataLoader):
     correct_t2i = 0  # text‑>image retrieval accuracy
     n_samples = 0
 
-    for images, texts in tqdm(dataloader, desc="Evaluating"):
+    for images, texts in tqdm(dataloader_img, desc="Evaluating images"):
         images = images.to(device)
         texts = model.text.tokenize(texts, device)
 
@@ -65,7 +65,22 @@ def evaluate(model: CLIP, dataloader: DataLoader):
         correct_t2i += (pred_t == targets).sum().item()
         n_samples += logits.size(0)
 
-    mean_loss = total_loss / len(dataloader)
+    for timeseries, texts in tqdm(dataloader_ecg, desc="Evaluating ecg"):
+        timeseries = timeseries.to(device)
+        texts = model.text.tokenize(texts, device)
+
+        logits = model(ecg = timeseries, text = texts)
+        loss = clip_loss(logits)
+        total_loss += loss.item()
+
+        targets = torch.arange(logits.size(0), device=device)
+        pred_i = logits.argmax(dim=1)
+        pred_t = logits.argmax(dim=0)
+        correct_i2t += (pred_i == targets).sum().item()
+        correct_t2i += (pred_t == targets).sum().item()
+        n_samples += logits.size(0)
+
+    mean_loss = total_loss / len(dataloader_img)
     acc_i2t = correct_i2t / n_samples
     acc_t2i = correct_t2i / n_samples
     return mean_loss, acc_i2t, acc_t2i
@@ -102,7 +117,6 @@ def main():
 
     trainset_ecg = PTBXLWaveformDataset(root="data/ptbxl", split="train")
 
-  #  print(trainset_ecg[0])
     testset_ecg = PTBXLWaveformDataset(root="data/ptbxl", split="test")
 
     train_loader_ecg = DataLoader(trainset_ecg, batch_size=batch_size*gradient_accumulation_steps, shuffle=True, num_workers=4, pin_memory=True)
@@ -128,6 +142,7 @@ def main():
                 optimizer.zero_grad(set_to_none=True)
                 batch_loss = 0.0
                 start = 0
+                log_dict = {}
                 for a in range(gradient_accumulation_steps*NUM_MODALITIES):
                     end = start + batch_size
                     sub_images =  sub_texts =  sub_ecgs = None
@@ -139,24 +154,29 @@ def main():
                         sub_texts = texts_ecg[start:end]
                     token_batch = model.text.tokenize(sub_texts, device)
                     logits = model(images = sub_images, text = token_batch, ecg = sub_ecgs )
-                    loss = clip_loss(logits) / (gradient_accumulation_steps*NUM_MODALITIES)  # scale 
+                    loss = clip_loss(logits) / (gradient_accumulation_steps)  # scale 
                     loss.backward()
-                    batch_loss += loss.item() * (gradient_accumulation_steps ) #/ NUM_MODALITIES
+                    if a % NUM_MODALITIES == 0:
+                        log_dict["img_loss"] = loss.item() * gradient_accumulation_steps
+                    else:
+                        log_dict["ecg_loss"] = loss.item() * gradient_accumulation_steps
+                    batch_loss += loss.item()  /NUM_MODALITIES
                     start = (a //NUM_MODALITIES) * batch_size
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                 optimizer.step()
                 scheduler.step()
                 total_loss += batch_loss
 
-                wandb.log({"loss": batch_loss, "lr":scheduler.get_last_lr()[0], "time": time.time() - start_time})
+                log_dict["loss"] = batch_loss
+                log_dict["lr"] = scheduler.get_last_lr()[0]
+                log_dict["time"] = time.time() - start_time
+                wandb.log(log_dict)
                 pbar.update(1)
                 pbar.set_postfix(loss=batch_loss)
-
         total_loss /= steps_per_epoch #step#
         print(f"Epoch {epoch + 1}/{epochs} \t average loss over epoch: {total_loss:.4f}")
-        plot_data = next(iter(test_loader_imgs))
-        plot_embedding_space(model, plot_data)
-        mean_loss, acc_i2t, acc_t2i = evaluate(model, test_loader_imgs)
+        plot_embedding_space(model, test_loader_imgs,test_loader_ecg)
+        mean_loss, acc_i2t, acc_t2i = evaluate(model, test_loader_imgs, test_loader_ecg)
         print(f"Test loss: {mean_loss:.4f} \t i2t acc: {acc_i2t:.4f} \t t2i acc: {acc_t2i:.4f}")
         wandbimg = wandb.Image("embedding_space.png")
         wandb.log({"test_loss": mean_loss, "acc_i2t": acc_i2t, "acc_t2i": acc_t2i, "embedding_space": wandbimg})

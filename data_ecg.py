@@ -71,7 +71,7 @@ class PTBXLWaveformDataset(Dataset):
                     if a not in self.unique:
                         self.unique.append(a)
             self.unique.append("UNK")
-        self.meta = meta.reset_index()  # keep ecg_id as a column
+        
 
 
         #split on official strat_fold column your original script used
@@ -90,6 +90,8 @@ class PTBXLWaveformDataset(Dataset):
         elif split != "all":
             raise ValueError("split must be 'train', 'test', or 'all'")
         # choose filename column
+
+        self.meta = meta.reset_index()  # keep ecg_id as a column
         self.fn_col = "filename_lr" if sampling_rate == 100 else "filename_hr"
 
     # ---------------------------------------------------------------------
@@ -130,3 +132,27 @@ class PTBXLWaveformDataset(Dataset):
 
             return wave, labels
         return wave, str(labels)#, row.ecg_id
+    
+
+if __name__ == "__main__":
+    dataset = PTBXLWaveformDataset(root="data/ptbxl", split="train", label_type="text")
+    print(len(dataset))
+    print(dataset[0])
+
+    #visualize 12 different leads
+    import matplotlib.pyplot as plt
+    import numpy as np
+    #(B, 12, L)
+    data = next(iter(dataset))
+    ecg, text = data
+    B, C, L = ecg.shape
+    for b in range(B):
+        for i in range(C):
+            plt.subplot(12, 1, i + 1)
+            plt.plot(np.arange(L), ecg[B][i].numpy())
+            plt.title(text)
+        plt.show()
+
+
+    #print(dataset[0][1])
+    #print(dataset[0][1].shape)
