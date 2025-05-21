@@ -142,16 +142,23 @@ if __name__ == "__main__":
     #visualize 12 different leads
     import matplotlib.pyplot as plt
     import numpy as np
-    #(B, 12, L)
+    #(B, 12, L)_: tk
     data = next(iter(dataset))
     ecg, text = data
-    B, C, L = ecg.shape
-    for b in range(B):
-        for i in range(C):
-            plt.subplot(12, 1, i + 1)
-            plt.plot(np.arange(L), ecg[B][i].numpy())
-            plt.title(text)
-        plt.show()
+    C, L = ecg.shape
+    plt.figure(figsize=(12, 20))
+   # plt.title(text)
+    for i in range(C):
+        plt.subplot(12, 1, i + 1)
+        plt.plot(np.arange(L), ecg[i,:].numpy())
+        plt.title("Lead number "+ str(i), loc ='right', x = 1.15, y = 0.5)
+        plt.xlim(0, L)
+        plt.subplots_adjust(right = 0.85)
+        if i < C - 1:
+            plt.xticks([])
+
+    plt.savefig("figures/ecg_leads.png", dpi=300, bbox_inches='tight')
+    plt.show()
 
 
     #print(dataset[0][1])
