@@ -7,3 +7,6 @@ CLIP repo for Bioinformatics data. The goal is to project all types of data into
 Embedding Space for Text and Image looks something like this:
 
 ![BioCLIP Schematic](figures/embedding_space.png)
+
+Foundation Models:
+Time Series: vll https://github.com/amazon-science/chronos-forecasting
